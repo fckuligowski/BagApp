@@ -1,0 +1,70 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "IaaS with Chef Deployment: DNS",
+
+    "Parameters": {
+
+        "DeploymentType": {
+            "Description": "Environment type",
+            "Type": "String",
+            "AllowedValues": ["blue", "green"],
+            "Default": "blue"
+        },
+        "BlueELBEndpoint": {
+            "Type": "String"
+        },
+        "BlueELBCanonicalHostedZoneNameID": {
+            "Type": "String"
+        },
+        "GreenELBEndpoint": {
+            "Type": "String"
+        },
+        "GreenELBCanonicalHostedZoneNameID": {
+            "Type": "String"
+        }
+
+    },
+
+    "Mappings" : {
+    },
+
+    "Conditions": {
+      "IsBlue": { "Fn::Equals": [ { "Ref": "DeploymentType" }, "blue" ] }
+    },
+
+    "Resources": {
+
+        "BagAppRecordSet": {
+            "DeletionPolicy": "Delete",
+            "Type": "AWS::Route53::RecordSet",
+            "Properties": {
+                "HostedZoneName": "aws.aheadaviation.com.",
+                "Comment": "Record Set for Bag App",
+                "Name": "bag.aws.aheadaviation.com.",
+                "Type": "A",
+                "AliasTarget": {
+                    "HostedZoneId": {
+                      "Fn::If": [
+                          "IsBlue",
+                          { "Ref": "BlueELBCanonicalHostedZoneNameID" },
+                          { "Ref": "GreenELBCanonicalHostedZoneNameID" }
+                      ]
+                    },
+                    "DNSName": {
+                      "Fn::If": [
+                          "IsBlue",
+                          { "Ref": "BlueELBEndpoint" },
+                          { "Ref": "GreenELBEndpoint" }
+                      ]
+                    }
+                }
+            }
+        }
+
+
+    },
+
+    "Outputs": {
+    }
+
+}

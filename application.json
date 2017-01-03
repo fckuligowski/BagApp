@@ -1,0 +1,405 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "IaaS with Chef Deployment: ASG & ELB",
+
+    "Parameters": {
+        "DeploymentType": {
+            "Description": "Environment type",
+            "Type": "String",
+            "AllowedValues": ["blue", "green"],
+            "Default": "blue"
+        },
+        "Identifier": {
+            "Default": "Application Stack Template",
+            "Type": "String"
+        },
+        "InstanceName": {
+            "Description": "Instance Name",
+            "Default": "cdp-app",
+            "Type": "String"
+        },
+        "Identifiers": {
+            "Type": "String",
+            "Description": "Unique identifier for R53 Record Sets",
+            "Default": "abcd1234"
+        },
+        "InstanceTypes": {
+            "Type": "String",
+            "Default": "t2.medium",
+            "ConstraintDescription": "Only specific instance types allowed",
+            "AllowedValues": ["t2.nano", "t2.medium","m4.medium"]
+        },
+        "SSHCidr": {
+            "Type": "String",
+            "ConstraintDescription": "Must be a valid CIDR",
+            "Default": "10.10.10.0/24"
+        },
+        "KeyName": {
+            "ConstraintDescription": "Must be an exiting EC2 Key Pair",
+            "Type": "AWS::EC2::KeyPair::KeyName",
+            "Default": "adfskey.pem"
+        },
+        "VpcId": {
+            "ConstraintDescription": "Must be an existing VPC ID.",
+            "Type": "List<AWS::EC2::VPC::Id>",
+            "Default": ""
+        },
+        "DBSubnetID": {
+            "ConstraintDescription": "Must be an existing Subnet Id",
+            "Type": "List<AWS::EC2::Subnet::Id>",
+            "Default": ""
+        },
+        "SubnetID": {
+            "ConstraintDescription": "Must be an existing Subnet ID.",
+            "Type": "List<AWS::EC2::Subnet::Id>",
+            "Default": ""
+        },
+        "InfraTag": {
+            "ConstraintDescription": "Tags instance if it is infrastructure",
+            "Type": "String",
+            "Default": "Yes",
+            "AllowedValues": ["Yes", "No"]
+        },
+        "ADUserTag": {
+            "Description": "AD Username is required.",
+            "Type": "String",
+            "Default": "zzeid",
+            "MinLength": "4",
+            "AllowedPattern": "[a-zA-Z]{4,8}[0-9]{0,8}"
+        }
+    },
+    "Mappings" : {
+        "RegionMap": {
+            "us-east-1": {"64": "ami-17b99b00"}
+        }
+    },
+    "Conditions": {
+        "CreateBlueEnvironment": {"Fn::Equals": [{"Ref": "DeploymentType"}, "blue"]},
+        "CreateGreenEnvironment": {"Fn::Equals": [{"Ref": "DeploymentType"}, "green"]}
+    },
+    "Resources": {
+
+        "CDPELBHighRequest": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale Up Alarm for ELB request count",
+                "MetricName": "RequestCount",
+                "Namespace": "AWS/ELB",
+                "Statistic": "Sum",
+                "Period": "60",
+                "EvaluationPeriods": "1",
+                "Threshold": "100",
+                "AlarmActions": [
+                    {
+                        "Ref": "CDPScaleUpPolicy"
+                    }
+                ],
+                "Dimensions": [
+                    {
+                        "Name": "LoadBalancerName",
+                        "Value": {"Ref": "CDPELB"}
+                    }
+                ],
+                "ComparisonOperator": "GreaterThanThreshold"
+            }
+        },
+        "CDPELBLowRequest": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale Down Alarm for ELB request count",
+                "MetricName": "RequestCount",
+                "Namespace": "AWS/ELB",
+                "Statistic": "Sum",
+                "Period": "60",
+                "EvaluationPeriods": "1",
+                "Threshold": "100",
+                "AlarmActions": [
+                    {
+                        "Ref": "CDPScaleDownPolicy"
+                    }
+                ],
+                "Dimensions": [
+                    {
+                        "Name": "LoadBalancerName",
+                        "Value": {"Ref": "CDPELB"}
+                    }
+                ],
+                "ComparisonOperator": "LessThanThreshold"
+            }
+        },
+        "CDPScaleUpPolicy": {
+            "Type": "AWS::AutoScaling::ScalingPolicy",
+            "Properties": {
+                "AdjustmentType": "ChangeInCapacity",
+                "AutoScalingGroupName": {"Ref": "CDPASGAPP"},
+                "Cooldown": "60",
+                "ScalingAdjustment": "1"
+            }
+        },
+        "CDPScaleDownPolicy": {
+            "Type": "AWS::AutoScaling::ScalingPolicy",
+            "Properties": {
+                "AdjustmentType": "ChangeInCapacity",
+                "AutoScalingGroupName": {"Ref": "CDPASGAPP"},
+                "Cooldown": "60",
+                "ScalingAdjustment": "-1"
+            }
+        },
+        "DBASGLC": {
+            "Type": "AWS::AutoScaling::LaunchConfiguration",
+            "Properties": {
+                "BlockDeviceMappings": [
+                    {
+                        "DeviceName": "/dev/sdb",
+                        "Ebs": { "VolumeSize": "40"}
+                    }
+                ],
+                "ImageId": {"Fn::FindInMap": ["RegionMap", {"Ref": "AWS::Region"}, "64"]},
+                "InstanceType": {"Ref": "InstanceTypes"},
+                "KeyName": {"Ref": "KeyName"},
+                "SecurityGroups": [{"Ref": "DBInstanceSG"}],
+                "UserData": {
+                    "Fn::If": [
+                        "CreateBlueEnvironment",
+                        {
+                            "Fn::Base64": {
+                                "Fn::Join": [
+                                    "", [
+                                    "#!/bin/bash\n",
+                                    "chef-client -r 'recipe[bagapp_sql]' -E blue","\n",
+                                    "/opt/aws/bin/cfn-signal -e 0 --stack ", { "Ref": "AWS::StackName" },
+                                    " --resource CDPASGDB ",
+                                    " --region ", { "Ref" : "AWS::Region" }, "\n"
+                                    ]
+                                ]
+                            }
+                        },
+                        {                        
+                            "Fn::Base64": {
+                                "Fn::Join": [
+                                    "", [
+                                    "#!/bin/bash\n",
+                                    "chef-client -r 'recipe[bagapp_sql]' -E green","\n",
+                                    "/opt/aws/bin/cfn-signal -e 0 --stack ", { "Ref": "AWS::StackName" },
+                                    " --resource CDPASGDB ",
+                                    " --region ", { "Ref" : "AWS::Region" }, "\n"
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        "CDPASGLC": {
+            "Type": "AWS::AutoScaling::LaunchConfiguration",
+            "Properties": {
+                "BlockDeviceMappings": [
+                    {
+                        "DeviceName": "/dev/sdb",
+                        "Ebs": { "VolumeSize": "40"}
+                        }
+                ],
+                "ImageId": {"Fn::FindInMap": ["RegionMap", {"Ref": "AWS::Region"}, "64"]},
+                "InstanceType": {"Ref": "InstanceTypes"},
+                "KeyName": {"Ref": "KeyName"},
+                "SecurityGroups": [{"Ref": "CDPInstanceSG"}],
+                "UserData": {
+                    "Fn::If": [
+                        "CreateBlueEnvironment",
+                        {
+                            "Fn::Base64": {
+                                "Fn::Join": [
+                                    "", [
+                                    "#!/bin/bash\n",
+                                    "chef-client -r 'recipe[bagapp]' -E blue"
+                                    ]
+                                ]
+                            }
+                        },
+                        {
+                            "Fn::Base64": {
+                                "Fn::Join": [
+                                    "", [
+                                    "#!/bin/bash\n",
+                                    "chef-client -r 'recipe[bagapp]' -E green"
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        "CDPASGDB": {
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "CreationPolicy": {
+              "ResourceSignal": {
+                "Count": "1",
+                "Timeout": "PT15M"
+              }
+            },
+            "Properties": {
+                "VPCZoneIdentifier":  [{"Fn::Select": [ "0", {"Ref": "DBSubnetID"} ] }, {"Fn::Select": [ "1", {"Ref": "DBSubnetID"} ] } ],
+                "DesiredCapacity": "1",
+                "LaunchConfigurationName": {"Ref": "DBASGLC"},
+                "MaxSize": "1",
+                "MinSize": "1"
+            }
+        },
+        "CDPASGAPP" : {
+            "DependsOn": "CDPASGDB",
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "UpdatePolicy": {
+              "AutoScalingScheduledAction" : {
+                "IgnoreUnmodifiedGroupSizeProperties" : "true"
+              },
+              "AutoScalingRollingUpdate": {
+                "MinInstancesInService": "1",
+                "MaxBatchSize": "1",
+                "WaitOnResourceSignals": "false",
+                "PauseTime" : "PT2M"
+              }
+            },
+            "Properties": {
+                "VPCZoneIdentifier": [ {"Fn::Select": [ "0", {"Ref": "SubnetID"} ] }, {"Fn::Select": [ "1", {"Ref": "SubnetID"} ] } ],
+                "DesiredCapacity": "2",
+                "LaunchConfigurationName": {"Ref": "CDPASGLC"},
+                "LoadBalancerNames": [{"Ref": "CDPELB"}],
+                "MaxSize": "2",
+                "MinSize": "1",
+                "Tags": [
+                    {
+                     "Key": "Instance Name",
+                     "Value": {"Fn::Base64": {"Ref": "InstanceName"}},
+                     "PropagateAtLaunch": "true"
+                    },
+                    {
+                     "Key": "Infrastructure",
+                     "Value": {"Ref": "InfraTag"},
+                     "PropagateAtLaunch": "true"
+                    },
+                    {
+                     "Key": "Owner",
+                     "Value": {"Ref": "ADUserTag"},
+                     "PropagateAtLaunch": "true"
+                    }
+                ]
+            }
+        },
+        "CDPELBSG": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Security Group for CDP ELB",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ],
+                "VpcId": {"Fn::Select" : ["0", {"Ref": "VpcId"} ] }
+            }
+        },
+        "CDPELB": {
+            "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+            "Properties": {
+                "HealthCheck" : {
+                  "Target" : "HTTP:80/",
+                  "HealthyThreshold" : "2",
+                  "UnhealthyThreshold" : "2",
+                  "Interval" : "5",
+                  "Timeout" : "4"
+                },
+                "Subnets": [ {"Fn::Select": ["0", {"Ref": "SubnetID"} ] }, {"Fn::Select": ["1", {"Ref": "SubnetID"}]} ],
+                "Listeners": [
+                    {
+                        "LoadBalancerPort": "80",
+                        "InstancePort": "80",
+                        "Protocol": "HTTP"
+                    }
+                ],
+                "SecurityGroups": [
+                    {
+                        "Ref": "CDPELBSG"
+                    }
+                ]
+            }
+        },
+        "DBInstanceSG": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Enable MySQL Access from App",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "3306",
+                        "ToPort": "3306",
+                        "SourceSecurityGroupId": {"Ref": "CDPInstanceSG"}
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "172.21.0.0/16"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "443",
+                        "ToPort": "443",
+                        "CidrIp": "172.21.0.0/16"
+                    }
+                ],
+                "VpcId": {"Fn::Select": ["0", {"Ref": "VpcId"}]}
+            },
+            "DependsOn": "CDPInstanceSG"
+        },
+        "CDPInstanceSG": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Enable ELB & SSH Access",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": {"Ref": "SSHCidr"}
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "SourceSecurityGroupId": {"Ref": "CDPELBSG"}
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "172.21.0.0/16"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "443",
+                        "ToPort": "443",
+                        "CidrIp": "172.21.0.0/16"
+                    }
+                ],
+                "VpcId": {"Fn::Select" : ["0", {"Ref": "VpcId"} ] }
+            }
+        }
+    },
+
+    "Outputs": {
+
+      "ELBCanonicalHostedZoneNameID": {
+        "Value": {"Fn::GetAtt": ["CDPELB", "CanonicalHostedZoneNameID"] }
+      },
+
+      "ELBEndpoint": {
+        "Value": { "Fn::GetAtt": [ "CDPELB", "DNSName" ] }
+      }
+
+    },
+
+}

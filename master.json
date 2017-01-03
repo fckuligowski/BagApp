@@ -1,0 +1,71 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "IaaS with Chef Deployment",
+
+  "Parameters": {
+
+    "DeploymentType": {
+      "Type": "String",
+      "Default": "blue",
+      "AllowedValues": [ "blue", "green" ]
+    }
+
+  },
+
+  "Mappings": {
+  },
+
+  "Conditions": {
+  },
+
+  "Resources": {
+
+    "Blue": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL":                          "https://s3.amazonaws.com/ahead-reinvent-iaas-demo/application.json",
+        "Parameters": {
+          "DBSubnetID":                         "subnet-914b0dc9,subnet-c3007ae9",
+          "DeploymentType":                     "blue",
+          "KeyName":                            "LHerzKey",
+          "SubnetID":                           "subnet-9f4b0dc7,subnet-c7007aed",
+          "VpcId":                              "vpc-c010c3a7"
+        }
+      }
+    },
+
+    "Green": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL":                          "https://s3.amazonaws.com/ahead-reinvent-iaas-demo/application.json",
+        "Parameters": {
+          "DBSubnetID":                         "subnet-914b0dc9,subnet-c3007ae9",
+          "DeploymentType":                     "green",
+          "KeyName":                            "LHerzKey",
+          "SubnetID":                           "subnet-9f4b0dc7,subnet-c7007aed",
+          "VpcId":                              "vpc-c010c3a7"
+        }
+      }
+    },
+
+    "DNS": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL":                          "https://s3.amazonaws.com/ahead-reinvent-iaas-demo/dns.json",
+        "Parameters": {
+          "DeploymentType":                     { "Ref": "DeploymentType" },
+          "BlueELBCanonicalHostedZoneNameID":   { "Fn::GetAtt": [ "Blue", "Outputs.ELBCanonicalHostedZoneNameID" ] },
+          "BlueELBEndpoint":                    { "Fn::GetAtt": [ "Blue", "Outputs.ELBEndpoint" ] },
+          "GreenELBCanonicalHostedZoneNameID":  { "Fn::GetAtt": [ "Green", "Outputs.ELBCanonicalHostedZoneNameID" ] },
+          "GreenELBEndpoint":                   { "Fn::GetAtt": [ "Green", "Outputs.ELBEndpoint" ] }
+        }
+      }
+    }
+
+  },
+
+  "Outputs": {
+  }
+
+}
+
