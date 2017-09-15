@@ -20,7 +20,7 @@
         },
         "Identifiers": {
             "Type": "String",
-            "Description": "Unique identifier for R53 Record Sets",
+            "Description": "Unique identifier for Route 53 Record Sets",
             "Default": "abcd1234"
         },
         "InstanceTypes": {
