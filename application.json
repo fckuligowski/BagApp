@@ -400,6 +400,5 @@
         "Value": { "Fn::GetAtt": [ "CDPELB", "DNSName" ] }
       }
 
-    },
-
+    }
 }
