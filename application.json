@@ -7,7 +7,7 @@
             "Description": "Environment type",
             "Type": "String",
             "AllowedValues": ["blue", "green"],
-            "Default": "green"
+            "Default": "blue"
         },
         "Identifier": {
             "Default": "Application Stack Template",
